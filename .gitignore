@@ -1,0 +1,11 @@
+rough_note.md
+work.md
+test_http.py
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.env
+.env.*
+api.md
