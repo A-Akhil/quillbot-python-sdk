@@ -1,8 +1,9 @@
 """Tests for the QuillBot SDK -- hits the actual QuillBot server.
 
 Setup:
-    1. Put your useridtoken in a file called .env in the project root:
-       QUILLBOT_TOKEN=eyJhbG...
+    1. Put your credentials in a file called .env in the project root:
+       QUILLBOT_EMAIL="user@example.com"
+       QUILLBOT_PASSWORD="secretpassword"
 
     2. Run:
        python3 -m pytest tests/test_unit.py -v
@@ -21,31 +22,34 @@ from quillbot import (
 )
 
 
-def _load_token() -> str:
-    """Load token from env var, or from .env file in the project root."""
-    token = os.environ.get("QUILLBOT_TOKEN", "")
-    if token:
-        return token
-
+def _load_env() -> dict[str, str]:
+    """Load env vars, also checking .env file in the project root."""
     env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
     if os.path.exists(env_path):
         with open(env_path) as f:
             for line in f:
                 line = line.strip()
-                if line.startswith("QUILLBOT_TOKEN="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
-    return ""
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, val = line.split("=", 1)
+                    os.environ.setdefault(
+                        key.strip(), val.strip().strip('"').strip("'")
+                    )
+    return os.environ
 
 
-TOKEN = _load_token()
+_load_env()
+EMAIL = os.environ.get("QUILLBOT_EMAIL", "")
+PASSWORD = os.environ.get("QUILLBOT_PASSWORD", "")
 
 
 @pytest.fixture
 def bot():
     """Yield an authenticated QuillBot client, then close it."""
-    if not TOKEN:
-        pytest.skip("No token found. Set QUILLBOT_TOKEN env var or create .env file.")
-    client = QuillBot(useridtoken=TOKEN)
+    if not EMAIL or not PASSWORD:
+        pytest.skip("No credentials found. Set QUILLBOT_EMAIL and QUILLBOT_PASSWORD env vars or create .env file.")
+    client = QuillBot(email=EMAIL, password=PASSWORD)
     yield client
     client.close()
 

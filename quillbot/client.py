@@ -34,21 +34,51 @@ class QuillBot:
     which word to replace, which suggestion to pick, and how many
     iterations to run.
 
+    Construction patterns::
+
+        # Recommended: email + password (auto-refreshes tokens)
+        bot = QuillBot(email="user@example.com", password="secret")
+
+        # Legacy: raw token (you manage expiry)
+        bot = QuillBot(useridtoken="eyJ...")
+
     Args:
-        useridtoken: Firebase JWT from a logged-in QuillBot session.
+        email: QuillBot account email (used with ``password``).
+        password: QuillBot account password (used with ``email``).
+        useridtoken: Raw Firebase JWT (alternative to email/password).
         connect_sid: Express ``connect.sid`` session cookie (optional).
         timeout: HTTP request timeout in seconds.
     """
 
     def __init__(
         self,
-        useridtoken: str,
+        useridtoken: str | None = None,
         *,
+        email: str | None = None,
+        password: str | None = None,
         connect_sid: str | None = None,
         timeout: float = 30.0,
     ) -> None:
-        creds = Credentials(useridtoken=useridtoken, connect_sid=connect_sid)
-        self._http = HttpClient(creds, timeout=timeout)
+        if email and password:
+            self._creds = Credentials.from_login(email, password)
+        elif useridtoken:
+            self._creds = Credentials(
+                useridtoken=useridtoken, connect_sid=connect_sid,
+            )
+        else:
+            raise ValueError(
+                "Provide either email + password, or a useridtoken."
+            )
+        if connect_sid:
+            self._creds.connect_sid = connect_sid
+        self._timeout = timeout
+        self._http = HttpClient(self._creds, timeout=timeout)
+
+    def _ensure_fresh_token(self) -> None:
+        """Refresh the Firebase token if expired and rebuild the HTTP client."""
+        if self._creds.refresh_if_needed():
+            self._http.close()
+            self._http = HttpClient(self._creds, timeout=self._timeout)
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -88,6 +118,7 @@ class QuillBot:
             alternative candidates, and (if requested) a pre-fetched
             synonym map.
         """
+        self._ensure_fresh_token()
         raw = endpoints.single_paraphrase(
             self._http,
             text,
@@ -136,6 +167,7 @@ class QuillBot:
         Returns:
             A :data:`SynonymMap` mapping each phrase to its suggestions.
         """
+        self._ensure_fresh_token()
         raw = endpoints.paraphrase_phrase(
             self._http, text, phrases, mode=mode
         )
@@ -165,6 +197,7 @@ class QuillBot:
         Returns:
             A :class:`SummarizeResult` containing the summary.
         """
+        self._ensure_fresh_token()
         raw = endpoints.summarize(
             self._http,
             text,
