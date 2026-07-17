@@ -15,7 +15,11 @@ Internally it delegates to the HTTP client and endpoint wrappers.
 
 from __future__ import annotations
 
+import concurrent.futures
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from quillbot.auth import Credentials
 from quillbot.http import HttpClient
@@ -125,6 +129,7 @@ class QuillBot:
         """
         self._ensure_fresh_token()
         
+        logger.debug("Calling sentence splitter...")
         split_raw = endpoints.sentence_splitter(self._http, text)
         sentences_data = split_raw.get("data", {}).get("sentences", [])
         
@@ -132,7 +137,7 @@ class QuillBot:
             # Fallback if splitter fails or returns nothing
             sentences_data = [{"text": text, "start": 0, "end": len(text)}]
             
-        merged_paraphrased = []
+        merged_paraphrased = [None] * len(sentences_data)
         merged_synonyms: SynonymMap = {}
         merged_phrases = []
         all_alternatives = []
@@ -140,7 +145,7 @@ class QuillBot:
         # We save the last raw response for the ParaphraseResult
         last_raw = {}
 
-        for sent_info in sentences_data:
+        def process_chunk(index: int, sent_info: dict) -> tuple[int, str, list, list, dict, dict]:
             chunk_text = sent_info.get("text", "")
             
             # Preserve leading/trailing whitespace which might be stripped by the API
@@ -149,8 +154,7 @@ class QuillBot:
             clean_chunk = chunk_text.strip()
             
             if not clean_chunk:
-                merged_paraphrased.append(chunk_text)
-                continue
+                return index, chunk_text, [], [], {}, {}
                 
             try:
                 raw = endpoints.single_paraphrase(
@@ -160,23 +164,39 @@ class QuillBot:
                     strength=strength,
                     frozen_words=frozen_words,
                 )
-                last_raw = raw
                 
                 paraphrased_text, alternatives, phrases = self._parse_paraphrase(raw)
                 
                 if not paraphrased_text:
-                    merged_paraphrased.append(chunk_text)
-                else:
-                    merged_paraphrased.append(l_space + paraphrased_text + r_space)
-                    all_alternatives.extend(alternatives)
-                    merged_phrases.extend(phrases)
+                    return index, chunk_text, [], [], {}, raw
                     
-                    if fetch_synonyms and phrases:
-                        synonyms = self._fetch_thesaurus(paraphrased_text, phrases, mode=mode)
-                        merged_synonyms.update(synonyms)
-            except Exception:
-                # Graceful fallback: keep the original sentence if this chunk fails
-                merged_paraphrased.append(chunk_text)
+                final_text = l_space + paraphrased_text + r_space
+                synonyms = {}
+                if fetch_synonyms and phrases:
+                    synonyms = self._fetch_thesaurus(paraphrased_text, phrases, mode=mode)
+                    
+                return index, final_text, alternatives, phrases, synonyms, raw
+            except Exception as e:
+                logger.warning(f"Chunk {index+1} failed: {e}")
+                return index, chunk_text, [], [], {}, {}
+
+        logger.debug(f"Processing {len(sentences_data)} chunks concurrently...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+            futures = [
+                executor.submit(process_chunk, i, info) 
+                for i, info in enumerate(sentences_data)
+            ]
+            
+            for future in concurrent.futures.as_completed(futures):
+                index, p_text, alts, phr, syn, raw = future.result()
+                merged_paraphrased[index] = p_text
+                all_alternatives.extend(alts)
+                merged_phrases.extend(phr)
+                merged_synonyms.update(syn)
+                if raw:
+                    last_raw = raw
+                    
+        logger.debug("Finished processing all chunks.")
 
         return ParaphraseResult(
             original_text=text,
