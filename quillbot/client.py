@@ -173,7 +173,6 @@ class QuillBot:
                 
                 if not paraphrased_text:
                     return index, chunk_text, [], [], {}, raw
-                    
                 final_text = l_space + paraphrased_text + r_space
                 synonyms = {}
                 if fetch_synonyms and phrases:

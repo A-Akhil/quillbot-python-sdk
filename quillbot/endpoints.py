@@ -31,13 +31,17 @@ _PARAPHRASER_HEADERS = {
 
 class ParaphraseMode(int, Enum):
     """Common paraphrase rewriting modes."""
-    STANDARD = 0
-    FLUENCY = 1
-    FORMAL = 2
+    FLUENCY = 0
+    STANDARD = 2
     CREATIVE = 6
-    ACADEMIC = 10
-    SIMPLE = 12
-    CUSTOM = 99
+    SHORTEN = 7
+    EXPAND = 8
+    FORMAL = 9
+    SIMPLE = 10
+    NARRATIVE = 12
+    HUMANIZER = 12
+    ACADEMIC = 99
+    CUSTOM = 100
 
 
 class Language(str, Enum):
@@ -118,10 +122,15 @@ def single_paraphrase(
     if mode == 99:
         payload["customModeName"] = ""
 
+    headers = dict(_PARAPHRASER_HEADERS)
+    if mode == 12:
+        headers["qb-product"] = "AI_HUMANIZER"
+        headers["referer"] = "https://quillbot.com/ai-humanizer"
+
     return client.post_json(
         f"/api/paraphraser/single-paraphrase/{int(mode)}",
         payload,
-        extra_headers=_PARAPHRASER_HEADERS,
+        extra_headers=headers,
     )
 
 

@@ -81,7 +81,7 @@ class TestParaphrase:
     def test_paraphrase_standard(self, bot: QuillBot):
         """Test standard mode paraphrasing (available to all)."""
         text = "The quick brown fox jumps over the lazy dog."
-        result = bot.paraphrase(text, mode=0, strength=2)  # Mode 0 = Standard
+        result = bot.paraphrase(text, mode=2)  # Mode 2 = Standard
         
         assert result.original_text == text
         assert len(result.paraphrased_text) > 0
@@ -94,13 +94,23 @@ class TestParaphrase:
         text = "The quick brown fox jumps over the lazy dog."
         
         # Mode 9 = Formal
-        res_formal = bot.paraphrase(text, mode=9, strength=2)
+        res_formal = bot.paraphrase(text, mode=9)
         assert len(res_formal.paraphrased_text) > 0
         
         # Mode 6 = Shorten
-        res_shorten = bot.paraphrase(text, mode=6, strength=2)
+        res_shorten = bot.paraphrase(text, mode=6)
         assert len(res_shorten.paraphrased_text) > 0
         assert len(res_shorten.paraphrased_text) <= len(text) + 20
+
+    def test_humanizer(self, bot: QuillBot):
+        """Test the AI Humanizer / Narrative mode."""
+        if not bot.is_premium:
+            pytest.skip("Account is not premium. Skipping humanizer test.")
+            
+        text = "The quick brown fox jumps over the lazy dog."
+        res = bot.paraphrase(text, mode=12)
+        assert len(res.paraphrased_text) > 0
+        assert "paras_13" in str(res.raw) or "paras_" in str(res.raw)
 
     @pytest.mark.parametrize("word_count", [50, 150, 300, 500])
     def test_paraphrase_various_lengths(self, bot: QuillBot, word_count: int):
@@ -116,7 +126,7 @@ class TestParaphrase:
         # Truncate to exact word count roughly
         long_text = " ".join(long_text.split()[:word_count])
         
-        result = bot.paraphrase(long_text, mode=0)
+        result = bot.paraphrase(long_text, mode=2)
         assert len(result.paraphrased_text) > 0
         assert isinstance(result.paraphrased_text, str)
 
