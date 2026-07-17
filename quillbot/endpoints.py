@@ -167,6 +167,29 @@ def chunker(
     )
 
 
+def sentence_splitter(
+    client: HttpClient,
+    text: str,
+) -> dict[str, Any]:
+    """Call ``POST /api/utils/sentence-spiltter``.
+
+    Splits a large paragraph into individual sentences using QuillBot's backend.
+
+    Args:
+        client: Authenticated HTTP client.
+        text: The text to split.
+
+    Returns:
+        Raw JSON response dict containing ``data.sentences``.
+    """
+    payload: dict[str, Any] = {"text": text, "fallback": True}
+    return client.post_json(
+        "/api/utils/sentence-spiltter",
+        payload,
+        extra_headers=_PARAPHRASER_HEADERS,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Summarizer
 # ---------------------------------------------------------------------------

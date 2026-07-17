@@ -124,29 +124,67 @@ class QuillBot:
             synonym map.
         """
         self._ensure_fresh_token()
-        raw = endpoints.single_paraphrase(
-            self._http,
-            text,
-            mode=mode,
-            strength=strength,
-            frozen_words=frozen_words,
-        )
+        
+        split_raw = endpoints.sentence_splitter(self._http, text)
+        sentences_data = split_raw.get("data", {}).get("sentences", [])
+        
+        if not sentences_data:
+            # Fallback if splitter fails or returns nothing
+            sentences_data = [{"text": text, "start": 0, "end": len(text)}]
+            
+        merged_paraphrased = []
+        merged_synonyms: SynonymMap = {}
+        merged_phrases = []
+        all_alternatives = []
+        
+        # We save the last raw response for the ParaphraseResult
+        last_raw = {}
 
-        # Extract the primary paraphrase and alternatives from the response.
-        paraphrased_text, alternatives, phrases = self._parse_paraphrase(raw)
-
-        # Optionally fetch bulk synonyms for the paraphrased output.
-        synonyms: SynonymMap = {}
-        if fetch_synonyms and phrases:
-            synonyms = self._fetch_thesaurus(paraphrased_text, phrases, mode=mode)
+        for sent_info in sentences_data:
+            chunk_text = sent_info.get("text", "")
+            
+            # Preserve leading/trailing whitespace which might be stripped by the API
+            l_space = chunk_text[:len(chunk_text) - len(chunk_text.lstrip())]
+            r_space = chunk_text[len(chunk_text.rstrip()):]
+            clean_chunk = chunk_text.strip()
+            
+            if not clean_chunk:
+                merged_paraphrased.append(chunk_text)
+                continue
+                
+            try:
+                raw = endpoints.single_paraphrase(
+                    self._http,
+                    clean_chunk,
+                    mode=mode,
+                    strength=strength,
+                    frozen_words=frozen_words,
+                )
+                last_raw = raw
+                
+                paraphrased_text, alternatives, phrases = self._parse_paraphrase(raw)
+                
+                if not paraphrased_text:
+                    merged_paraphrased.append(chunk_text)
+                else:
+                    merged_paraphrased.append(l_space + paraphrased_text + r_space)
+                    all_alternatives.extend(alternatives)
+                    merged_phrases.extend(phrases)
+                    
+                    if fetch_synonyms and phrases:
+                        synonyms = self._fetch_thesaurus(paraphrased_text, phrases, mode=mode)
+                        merged_synonyms.update(synonyms)
+            except Exception:
+                # Graceful fallback: keep the original sentence if this chunk fails
+                merged_paraphrased.append(chunk_text)
 
         return ParaphraseResult(
             original_text=text,
-            paraphrased_text=paraphrased_text,
-            alternatives=alternatives,
-            synonyms=synonyms,
-            phrases=phrases,
-            raw=raw,
+            paraphrased_text="".join(merged_paraphrased),
+            alternatives=all_alternatives,
+            synonyms=merged_synonyms,
+            phrases=merged_phrases,
+            raw=last_raw,
         )
 
     # -- synonyms ------------------------------------------------------------
