@@ -1,8 +1,11 @@
 name: Publish to PyPI
 
 on:
-  release:
-    types: [published]
+  push:
+    branches:
+      - master
+    paths:
+      - 'pyproject.toml'
 
 jobs:
   pypi-publish:
@@ -11,22 +14,53 @@ jobs:
     environment: pypi
     permissions:
       id-token: write
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Get version from pyproject.toml
+        id: get_version
+        run: |
+          VERSION=$(grep -oP '(?<=^version = ")[^"]*' pyproject.toml)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Found version: $VERSION"
+
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          EXISTS=$(git ls-remote --tags origin refs/tags/v${{ env.VERSION }})
+          if [ -n "$EXISTS" ]; then
+            echo "Tag v${{ env.VERSION }} already exists. Skipping publish."
+            echo "should_publish=false" >> $GITHUB_ENV
+          else
+            echo "Tag v${{ env.VERSION }} does not exist. Will publish."
+            echo "should_publish=true" >> $GITHUB_ENV
+          fi
+
       - name: Set up Python
+        if: env.should_publish == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
       - name: Install build dependencies
+        if: env.should_publish == 'true'
         run: python -m pip install --upgrade pip build twine
 
       - name: Build distribution
+        if: env.should_publish == 'true'
         run: python -m build
 
+      - name: Create GitHub Release
+        if: env.should_publish == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: Release v${{ env.VERSION }}
+          generate_release_notes: true
+
       - name: Publish package distributions to PyPI
+        if: env.should_publish == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
