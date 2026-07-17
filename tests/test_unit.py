@@ -20,6 +20,13 @@ from quillbot import (
     SummarizeResult,
     AuthenticationError,
 )
+import time
+
+@pytest.fixture(autouse=True)
+def slow_down_tests():
+    """Wait 10 seconds between tests to prevent DDoS/Rate limits from QuillBot."""
+    yield
+    time.sleep(10)
 
 
 def _load_env() -> dict[str, str]:
@@ -44,12 +51,13 @@ EMAIL = os.environ.get("QUILLBOT_EMAIL", "")
 PASSWORD = os.environ.get("QUILLBOT_PASSWORD", "")
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def bot():
     """Yield an authenticated QuillBot client, then close it."""
     if not EMAIL or not PASSWORD:
         pytest.skip("No credentials found. Set QUILLBOT_EMAIL and QUILLBOT_PASSWORD env vars or create .env file.")
     client = QuillBot(email=EMAIL, password=PASSWORD)
+    print(f"\n[Auth] Successfully logged in. Premium account: {client.is_premium}")
     yield client
     client.close()
 
@@ -69,6 +77,48 @@ class TestParaphrase:
         assert len(result.paraphrased_text) > 0
         assert result.paraphrased_text != result.original_text
         print(f"  Paraphrased: {result.paraphrased_text}")
+
+    def test_paraphrase_standard(self, bot: QuillBot):
+        """Test standard mode paraphrasing (available to all)."""
+        text = "The quick brown fox jumps over the lazy dog."
+        result = bot.paraphrase(text, mode=0, strength=2)  # Mode 0 = Standard
+        
+        assert result.original_text == text
+        assert len(result.paraphrased_text) > 0
+
+    def test_paraphrase_premium_modes(self, bot: QuillBot):
+        """Test premium modes (Formal, Shorten) if account is premium."""
+        if not bot.is_premium:
+            pytest.skip("Account is not premium. Skipping premium mode tests.")
+            
+        text = "The quick brown fox jumps over the lazy dog."
+        
+        # Mode 9 = Formal
+        res_formal = bot.paraphrase(text, mode=9, strength=2)
+        assert len(res_formal.paraphrased_text) > 0
+        
+        # Mode 6 = Shorten
+        res_shorten = bot.paraphrase(text, mode=6, strength=2)
+        assert len(res_shorten.paraphrased_text) > 0
+        assert len(res_shorten.paraphrased_text) <= len(text) + 20
+
+    @pytest.mark.parametrize("word_count", [50, 150, 300, 500])
+    def test_paraphrase_various_lengths(self, bot: QuillBot, word_count: int):
+        """Test paraphrasing with different word counts to ensure robust handling."""
+        if not bot.is_premium and word_count > 125:
+            pytest.skip("Account is not premium. Skipping long text test.")
+            
+        # Generate a realistic-looking long sentence structure
+        base_sentence = "The quick brown fox jumps over the lazy dog. "
+        words_in_base = 9
+        repetitions = (word_count // words_in_base) + 1
+        long_text = (base_sentence * repetitions).strip()
+        # Truncate to exact word count roughly
+        long_text = " ".join(long_text.split()[:word_count])
+        
+        result = bot.paraphrase(long_text, mode=0)
+        assert len(result.paraphrased_text) > 0
+        assert isinstance(result.paraphrased_text, str)
 
     def test_paraphrase_returns_synonyms(self, bot: QuillBot):
         result = bot.paraphrase(

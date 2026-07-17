@@ -86,6 +86,11 @@ class QuillBot:
         """Release the underlying HTTP connection pool."""
         self._http.close()
 
+    @property
+    def is_premium(self) -> bool:
+        """Return True if the authenticated account has Premium status."""
+        return self._creds.is_premium
+
     def __enter__(self) -> "QuillBot":
         return self
 

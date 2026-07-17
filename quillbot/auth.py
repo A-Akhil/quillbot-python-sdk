@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import platformdirs
 import re
 import time
 import urllib.error
@@ -26,7 +27,7 @@ _FIREBASE_PROJECT_ID = "paraphraser-472c1"
 
 # Firebase Web API key extracted from QuillBot's frontend source.
 # Stored reversed to prevent false-positive GitHub secret scanning alerts.
-_FIREBASE_API_KEY = "Qk7YTRNxx2URumJwqe6oL-YjGsWh7hAhSyazIA"[::-1]
+_FIREBASE_API_KEY = "Qk7YTRNxx2URumJwqe6oL-YjGsWgh7XhAySazIA"[::-1]
 
 # Endpoints for Firebase REST Auth.
 _SIGN_IN_URL = (
@@ -40,6 +41,19 @@ _REFRESH_URL = (
 
 # Buffer in seconds before the token's actual expiry to trigger a refresh.
 _EXPIRY_BUFFER_SECONDS = 300  # refresh 5 minutes early
+
+
+def _get_cache_path() -> str:
+    """Get the path to the authentication cache file."""
+    if "QUILLBOT_AUTH_FILE" in os.environ:
+        return os.environ["QUILLBOT_AUTH_FILE"]
+    cache_dir = platformdirs.user_cache_dir("quillbot", "quillbot")
+    # ensure directory exists
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+    except Exception:
+        pass
+    return os.path.join(cache_dir, "auth.json")
 
 
 def _firebase_sign_in(email: str, password: str) -> dict:
@@ -113,8 +127,8 @@ def _firebase_refresh(refresh_token: str) -> dict:
         ) from exc
 
 
-def _fetch_connect_sid(useridtoken: str, local_id: str, email: str) -> str | None:
-    """Fetch the connect.sid session cookie from Quillbot's backend."""
+def _fetch_account_details(useridtoken: str, local_id: str, email: str) -> dict[str, str | bool | None]:
+    """Fetch the connect.sid session cookie and premium status from Quillbot's backend."""
     url = "https://quillbot.com/api/auth/get-account-details"
     payload = {
         "uid": local_id,
@@ -137,15 +151,21 @@ def _fetch_connect_sid(useridtoken: str, local_id: str, email: str) -> str | Non
             "webapp-version": "44.1.0"
         }
     )
+    result = {"connect_sid": None, "premium": False}
     try:
         with urllib.request.urlopen(req) as resp:
             cookie_header = resp.info().get("Set-Cookie", "")
             m = re.search(r'connect\.sid=([^;]+)', cookie_header)
             if m:
-                return m.group(1)
+                result["connect_sid"] = m.group(1)
+            
+            # Parse JSON body to find premium status
+            data = json.loads(resp.read().decode("utf-8"))
+            if "data" in data and "profile" in data["data"]:
+                result["premium"] = data["data"]["profile"].get("premium", False)
     except Exception:
         pass
-    return None
+    return result
 
 
 @dataclass(slots=True)
@@ -166,6 +186,7 @@ class Credentials:
 
     useridtoken: str
     connect_sid: str | None = None
+    is_premium: bool = False
 
     # Private fields for managing auto-refresh.
     _email: str | None = field(default=None, repr=False)
@@ -193,6 +214,21 @@ class Credentials:
         self.useridtoken = result["id_token"]
         self._refresh_token = result["refresh_token"]
         self._token_expiry = time.time() + int(result.get("expires_in", 3600))
+        
+        # Save updated tokens to cache
+        cache_path = _get_cache_path()
+        try:
+            if os.path.exists(cache_path):
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                data["useridtoken"] = self.useridtoken
+                data["refresh_token"] = self._refresh_token
+                data["token_expiry"] = self._token_expiry
+                with open(cache_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=4)
+        except Exception:
+            pass
+            
         return True
 
     # -- factory helpers -----------------------------------------------------
@@ -201,8 +237,8 @@ class Credentials:
     def from_login(cls, email: str, password: str) -> "Credentials":
         """Authenticate with QuillBot using email and password.
 
-        Performs a Firebase signInWithPassword call and stores the
-        refresh token for automatic renewal.
+        First attempts to load cached credentials from the user's cache dir.
+        If missing, expired, or invalid, performs a Firebase signInWithPassword.
 
         Args:
             email: QuillBot account email.
@@ -214,18 +250,58 @@ class Credentials:
         Raises:
             AuthenticationError: On invalid email/password.
         """
+        cache_path = _get_cache_path()
+        try:
+            if os.path.exists(cache_path):
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                
+                # Use cache only if the email matches
+                if data.get("email") == email:
+                    creds = cls(
+                        useridtoken=data["useridtoken"],
+                        connect_sid=data.get("connect_sid"),
+                        is_premium=data.get("is_premium", False),
+                        _email=email,
+                        _password=password,
+                        _refresh_token=data.get("refresh_token"),
+                        _token_expiry=data.get("token_expiry", 0.0),
+                    )
+                    # Automatically refresh the cached token if it's expired
+                    creds.refresh_if_needed()
+                    return creds
+        except Exception:
+            pass  # Fallback to normal login
+
         result = _firebase_sign_in(email, password)
         useridtoken = result["idToken"]
         local_id = result.get("localId", "")
-        connect_sid = _fetch_connect_sid(useridtoken, local_id, email)
+        account_details = _fetch_account_details(useridtoken, local_id, email)
         
+        expiry = time.time() + int(result.get("expiresIn", 3600))
+        
+        # Save to cache
+        try:
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "email": email,
+                    "useridtoken": useridtoken,
+                    "connect_sid": account_details["connect_sid"],
+                    "is_premium": account_details["premium"],
+                    "refresh_token": result["refreshToken"],
+                    "token_expiry": expiry,
+                }, f, indent=4)
+        except Exception:
+            pass
+
         return cls(
             useridtoken=useridtoken,
-            connect_sid=connect_sid,
+            connect_sid=account_details["connect_sid"],
+            is_premium=account_details["premium"],
             _email=email,
             _password=password,
             _refresh_token=result["refreshToken"],
-            _token_expiry=time.time() + int(result.get("expiresIn", 3600)),
+            _token_expiry=expiry,
         )
 
     @classmethod
