@@ -11,6 +11,7 @@ later without touching the public API or response parsing.
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any
 
 from quillbot.http import HttpClient
@@ -28,15 +29,57 @@ _PARAPHRASER_HEADERS = {
 }
 
 
+class ParaphraseMode(int, Enum):
+    """Common paraphrase rewriting modes."""
+    STANDARD = 0
+    FLUENCY = 1
+    FORMAL = 2
+    CREATIVE = 6
+    ACADEMIC = 10
+    SIMPLE = 12
+    CUSTOM = 99
+
+
+class Language(str, Enum):
+    """Available input languages for paraphrasing and translation."""
+    AFRIKAANS = "af"
+    CHINESE_SIMPLIFIED = "zh"
+    DANISH = "da"
+    DUTCH = "nl"
+    ENGLISH_AU = "en-AU"
+    ENGLISH_CA = "en-CA"
+    ENGLISH_UK = "en-GB"
+    ENGLISH_US = "en-US"
+    ENGLISH = "en"
+    FRENCH = "fr"
+    GERMAN = "de"
+    HINDI = "hi"
+    INDONESIAN = "id"
+    ITALIAN = "it"
+    JAPANESE = "ja"
+    MALAY = "ms"
+    NORWEGIAN = "no"
+    POLISH = "pl"
+    PORTUGUESE_BR = "pt"
+    ROMANIAN = "ro"
+    RUSSIAN = "ru"
+    SPANISH = "es"
+    SWEDISH = "sv"
+    TAGALOG = "tl"
+    TURKISH = "tr"
+    UKRAINIAN = "uk"
+    VIETNAMESE = "vi"
+
+
 def single_paraphrase(
     client: HttpClient,
     text: str,
     *,
-    mode: int = 99,
-    strength: int = 9,
+    mode: int | ParaphraseMode = ParaphraseMode.STANDARD,
+    strength: int | None = None,
     frozen_words: list[str] | None = None,
     dialect: str = "US",
-    input_lang: str = "en",
+    input_lang: str | Language = Language.ENGLISH,
 ) -> dict[str, Any]:
     """Call ``POST /api/paraphraser/single-paraphrase/{mode}``.
 
@@ -53,13 +96,16 @@ def single_paraphrase(
     Returns:
         Raw JSON response dict.
     """
+    if strength is None:
+        strength = int(mode)
+        
     payload: dict[str, Any] = {
         "text": text,
         "strength": strength,
         "autoflip": False,
         "wikify": False,
         "fthresh": -1,
-        "inputLang": input_lang,
+        "inputLang": input_lang.value if hasattr(input_lang, "value") else input_lang,
         "quoteIndex": -1,
         "frozenWords": frozen_words or [],
         "nBeams": 4,
@@ -69,8 +115,11 @@ def single_paraphrase(
         "promptVersion": "v2",
         "multilingualModelVersion": "v2",
     }
+    if mode == 99:
+        payload["customModeName"] = ""
+
     return client.post_json(
-        f"/api/paraphraser/single-paraphrase/{mode}",
+        f"/api/paraphraser/single-paraphrase/{int(mode)}",
         payload,
         extra_headers=_PARAPHRASER_HEADERS,
     )

@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 from quillbot.auth import Credentials
 from quillbot.http import HttpClient
 from quillbot import endpoints
+from quillbot.endpoints import ParaphraseMode, Language
 from quillbot.models import ParaphraseResult, SummarizeResult, SynonymMap
 
 
@@ -107,19 +108,22 @@ class QuillBot:
         self,
         text: str,
         *,
-        mode: int = 99,
-        strength: int = 9,
+        mode: int | ParaphraseMode = ParaphraseMode.STANDARD,
+        synonyms_level: int = 0,
         frozen_words: list[str] | None = None,
         fetch_synonyms: bool = True,
+        input_lang: str | Language = Language.ENGLISH,
     ) -> ParaphraseResult:
         """Paraphrase *text* and optionally pre-fetch synonyms.
 
         Args:
             text: The sentence or paragraph to rewrite.
-            mode: QuillBot mode id (99=Custom, 0=Standard, etc.).
-            strength: Rewriting aggressiveness (0-10).
+            mode: Paraphrase mode (e.g. ParaphraseMode.STANDARD).
+            synonyms_level: Synonyms slider level (0, 1, 2, or 3).
             frozen_words: Words that must not be changed.
             fetch_synonyms: When ``True`` (default), automatically call the
+                thesaurus endpoint to populate ``result.synonyms``.
+            input_lang: The target language for the text (acts as translator).
                 thesaurus endpoint to populate ``result.synonyms``.
 
         Returns:
@@ -161,11 +165,11 @@ class QuillBot:
                     self._http,
                     clean_chunk,
                     mode=mode,
-                    strength=strength,
                     frozen_words=frozen_words,
+                    input_lang=input_lang,
                 )
                 
-                paraphrased_text, alternatives, phrases = self._parse_paraphrase(raw)
+                paraphrased_text, alternatives, phrases = self._parse_paraphrase(raw, synonyms_level)
                 
                 if not paraphrased_text:
                     return index, chunk_text, [], [], {}, raw
@@ -205,6 +209,37 @@ class QuillBot:
             synonyms=merged_synonyms,
             phrases=merged_phrases,
             raw=last_raw,
+        )
+
+    # -- translation ---------------------------------------------------------
+
+    def translate(
+        self,
+        text: str,
+        target_language: str | Language,
+        *,
+        mode: int | ParaphraseMode = ParaphraseMode.CUSTOM,
+        synonyms_level: int = 0,
+    ) -> ParaphraseResult:
+        """Translate *text* to the target language.
+
+        This uses the paraphraser's internal translation support by setting
+        the ``input_lang`` parameter.
+        
+        Args:
+            text: The sentence or paragraph to translate.
+            target_language: The target Language enum or string code (e.g., 'fr').
+            mode: Paraphrase mode to use while translating.
+            synonyms_level: Synonyms slider level (0-3).
+
+        Returns:
+            A :class:`ParaphraseResult` containing the translated text.
+        """
+        return self.paraphrase(
+            text,
+            mode=mode,
+            synonyms_level=synonyms_level,
+            input_lang=target_language,
         )
 
     # -- synonyms ------------------------------------------------------------
@@ -281,6 +316,7 @@ class QuillBot:
     @staticmethod
     def _parse_paraphrase(
         raw: dict[str, Any],
+        synonyms_level: int = 0,
     ) -> tuple[str, list[str], list[str]]:
         """Extract text, alternatives, and phrases from the raw response.
 
@@ -304,8 +340,17 @@ class QuillBot:
                 paras = value
                 break
 
-        primary = paras[0].get("alt", "") if paras else ""
-        alternatives = [p.get("alt", "") for p in paras[1:]]
+        all_alternatives = [p.get("alt", "") for p in paras]
+        
+        # Ensure the synonyms_level is within bounds
+        safe_level = min(synonyms_level, len(all_alternatives) - 1)
+        if safe_level < 0:
+            safe_level = 0
+            
+        primary = all_alternatives[safe_level] if all_alternatives else ""
+        
+        # Exclude the chosen primary from alternatives to avoid duplication
+        alternatives = [alt for i, alt in enumerate(all_alternatives) if i != safe_level]
 
         # QuillBot also returns segmentation data we can use as phrases.
         segments = first_entry.get("segments", {})

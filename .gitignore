@@ -10,3 +10,5 @@ build/
 .env.*
 api.md
 *.har
+ui/
+large_text.txt
