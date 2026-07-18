@@ -1,0 +1,89 @@
+{
+  "__description__": "THIS FILE IS A STARTING POINT FOR AGENTS using the QuillBot MCP Server. It demonstrates a typical workflow.",
+  "workflow_steps": [
+    {
+      "step": 1,
+      "tool": "paraphrase_text",
+      "args": {
+        "text": "The quick brown fox jumps over the lazy dog.",
+        "mode_name": "FORMAL",
+        "include_stats": true
+      },
+      "expected_response": {
+        "task_id": "433b1eae",
+        "text": "The swift brown fox leaps over the lethargic dog.",
+        "legend_annotated_text": "The [swift](changed) brown fox [leaps](changed) over the [lethargic](changed) dog.",
+        "word_stats": "..."
+      },
+      "agent_action": "Save the task_id. Read the annotated text to see what was changed."
+    },
+    {
+      "step": 2,
+      "tool": "stats",
+      "args": {
+        "task_id": "433b1eae"
+      },
+      "expected_response": {
+        "changed_words": ["swift", "leaps", "lethargic"],
+        "structural_changes": false,
+        "longest_unchanged_words": "brown fox over the dog.",
+        "word_count": 9
+      },
+      "agent_action": "Check if longest_unchanged_words is too long. If so, you must edit those words."
+    },
+    {
+      "step": 3,
+      "tool": "list_replaceable_phrases",
+      "args": {
+        "task_id": "433b1eae",
+        "target_string": "brown fox over the dog.",
+        "max_suggestions": 3
+      },
+      "expected_response": {
+        "phrases": [
+          {
+            "phrase_index": 1,
+            "current_phrase": "brown",
+            "top_suggestions": [
+              {"suggestion_index": 0, "text": "auburn"}
+            ]
+          }
+        ]
+      },
+      "agent_action": "Find synonyms for the unchanged words."
+    },
+    {
+      "step": 4,
+      "tool": "replace_many",
+      "args": {
+        "task_id": "433b1eae",
+        "replacements": [
+          {
+            "phrase_index": 1,
+            "suggestion_index": 0
+          }
+        ]
+      },
+      "expected_response": {
+        "text": "The swift auburn fox leaps over the lethargic dog."
+      },
+      "agent_action": "Apply the synonyms in batch."
+    },
+    {
+      "step": 5,
+      "tool": "export",
+      "args": {
+        "task_id": "433b1eae"
+      },
+      "agent_action": "Export the final version and show it to the user."
+    },
+    {
+      "step": 6,
+      "tool": "delete_task",
+      "args": {
+        "task_id": "433b1eae"
+      },
+      "agent_action": "Delete the task cache from disk when completely done."
+    }
+  ]
+}
