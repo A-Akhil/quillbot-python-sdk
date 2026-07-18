@@ -195,10 +195,7 @@ def paraphrase_and_diversify(
     protected_terms: Optional[List[str]] = None
 ) -> str:
     """
-    Macro tool that performs deep, recursive paraphrasing. 
-    It loops the text through Quillbot 'iterations' times while strictly protecting 'protected_terms'.
-    Returns the final text, the longest unchanged string (for potential manual synonym swapping), 
-    and a word-level unified diff to visualize structural changes.
+    Macro tool that performs deep, recursive paraphrasing. It loops the text through Quillbot 'iterations' times while strictly protecting 'protected_terms'. Returns a JSON string containing a newly generated `task_id`, the final text, the longest unchanged string (for potential manual synonym swapping), and `longest_unchanged_options`. Use this `task_id` with `replace_many` or `stats`.
     """
     logger.info(f"paraphrase_and_diversify called. Mode: {mode_name}, Iterations: {iterations}")
     bot = get_bot()
@@ -594,6 +591,21 @@ def list_options() -> str:
         "modes": modes,
         "languages": languages
     })
+
+@mcp.prompt()
+def quillbot_workflow() -> str:
+    """
+    Get the official instructions and example workflow for using the QuillBot MCP Server.
+    Use this prompt to learn how to effectively chain the paraphrasing and synonym tools together.
+    """
+    try:
+        source_dir = Path(__file__).parent / "mcp_resources"
+        instructions = (source_dir / "instructions.md").read_text(encoding="utf-8")
+        workflow = (source_dir / "START_HERE_AGENT_WORKFLOW.json").read_text(encoding="utf-8")
+        return f"### INSTRUCTIONS ###\n{instructions}\n\n### EXAMPLE WORKFLOW ###\n```json\n{workflow}\n```"
+    except Exception as e:
+        logger.error(f"Failed to load prompt resources: {e}")
+        return "Error loading workflow instructions."
 
 def main():
     """Entry point for the MCP server."""
