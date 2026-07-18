@@ -12,10 +12,18 @@
       "expected_response": {
         "task_id": "433b1eae",
         "text": "The swift brown fox leaps over the lethargic dog.",
-        "legend_annotated_text": "The [swift](changed) brown fox [leaps](changed) over the [lethargic](changed) dog.",
-        "word_stats": "..."
+        "longest_unchanged_words_found": "brown fox over the dog.",
+        "longest_unchanged_options": [
+          {
+            "phrase_index": 1,
+            "current_phrase": "brown",
+            "top_suggestions": [
+              {"suggestion_index": 0, "text": "auburn"}
+            ]
+          }
+        ]
       },
-      "agent_action": "Save the task_id. Read the annotated text to see what was changed."
+      "agent_action": "Save the task_id. The unchanged words and options are provided right away so you don't need to fetch them separately!"
     },
     {
       "step": 2,
@@ -27,20 +35,7 @@
         "changed_words": ["swift", "leaps", "lethargic"],
         "structural_changes": false,
         "longest_unchanged_words": "brown fox over the dog.",
-        "word_count": 9
-      },
-      "agent_action": "Check if longest_unchanged_words is too long. If so, you must edit those words."
-    },
-    {
-      "step": 3,
-      "tool": "list_replaceable_phrases",
-      "args": {
-        "task_id": "433b1eae",
-        "target_string": "brown fox over the dog.",
-        "max_suggestions": 3
-      },
-      "expected_response": {
-        "phrases": [
+        "longest_unchanged_options": [
           {
             "phrase_index": 1,
             "current_phrase": "brown",
@@ -48,9 +43,10 @@
               {"suggestion_index": 0, "text": "auburn"}
             ]
           }
-        ]
+        ],
+        "word_count": 9
       },
-      "agent_action": "Find synonyms for the unchanged words."
+      "agent_action": "Check if longest_unchanged_words is too long. If so, apply the suggestions provided."
     },
     {
       "step": 4,

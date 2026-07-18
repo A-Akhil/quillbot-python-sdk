@@ -92,6 +92,22 @@ def _minify(data: Any) -> str:
     """Helper to return highly optimized, single-line JSON to the LLM."""
     return json.dumps(data, separators=(',', ':'))
 
+def _get_options_for_text(target_string: str, phrases: List[str], synonyms: dict, max_suggestions: int = 3) -> List[dict]:
+    results = []
+    if not target_string:
+        return results
+    for idx, phrase in enumerate(phrases):
+        if phrase not in target_string:
+            continue
+        syns = synonyms.get(phrase, [])
+        if syns:
+            results.append({
+                "phrase_index": idx,
+                "current_phrase": phrase,
+                "top_suggestions": [{"suggestion_index": i, "text": s} for i, s in enumerate(syns[:max_suggestions])]
+            })
+    return results
+
 # ---------------------------------------------------------------------------
 # MCP Tools
 # ---------------------------------------------------------------------------
@@ -103,7 +119,8 @@ def paraphrase_text(
     synonyms_level: int = 2,
     custom_mode_name: Optional[str] = None,
     frozen_words: Optional[List[str]] = None,
-    input_lang: str = "ENGLISH"
+    input_lang: str = "ENGLISH",
+    include_stats: bool = True
 ) -> str:
     """
     Initialize a new document session by paraphrasing text. This is the entry point.
@@ -146,11 +163,26 @@ def paraphrase_text(
         )
         _save_session(session)
 
-        logger.info(f"Successfully generated new task_id: {task_id}")
-        return _minify({
+        response_dict = {
             "task_id": task_id,
             "text": session.current_text
-        })
+        }
+        
+        if include_stats:
+            from .diff_legend import process_legend
+            para_words = [{"word": w} for w in session.current_text.split(" ")]
+            para_words = process_legend(session.original_text, para_words)
+            
+            longest_unchanged_list = [w["word"] for w in para_words if w.get("in_longest_substring")]
+            unchanged_string = " ".join(longest_unchanged_list)
+            
+            response_dict["longest_unchanged_words_found"] = unchanged_string
+            response_dict["longest_unchanged_options"] = _get_options_for_text(
+                unchanged_string, session.phrases, session.synonyms
+            )
+
+        logger.info(f"Successfully generated new task_id: {task_id}")
+        return _minify(response_dict)
     except Exception as e:
         logger.error(f"Error in paraphrase_text: {str(e)}", exc_info=True)
         return _minify({"error": str(e)})
@@ -210,24 +242,33 @@ def paraphrase_and_diversify(
             if w.get("in_longest_substring"):
                 flags.append("longest_unchanged")
             
-            if flags:
-                flag_str = ",".join(flags)
-                annotated_words.append(f"[{word_str}]({flag_str})")
-            else:
-                annotated_words.append(word_str)
-                
-        unified_diff_str = " ".join(annotated_words)
-        
         # Find longest unchanged words string for the return object
         longest_unchanged_list = [w["word"] for w in para_words if w.get("in_longest_substring")]
         unchanged_string = " ".join(longest_unchanged_list)
         
-        logger.info(f"Diversify complete.")
+        longest_unchanged_options = _get_options_for_text(
+            unchanged_string, last_result.phrases, last_result.synonyms
+        )
+        
+        task_id = secrets.token_hex(4)
+        session = DocumentSession(
+            task_id=task_id,
+            original_text=text,
+            current_text=last_result.paraphrased_text,
+            mode=mode_name,
+            language="ENGLISH",
+            synonyms=last_result.synonyms,
+            phrases=last_result.phrases,
+            replaced_words_count=0
+        )
+        _save_session(session)
+        
+        logger.info(f"Diversify complete. Generated task_id: {task_id}")
         return _minify({
+            "task_id": task_id,
             "final_text": current_text,
             "longest_unchanged_words_found": unchanged_string,
-            "legend_annotated_text": unified_diff_str,
-            "word_stats": para_words
+            "longest_unchanged_options": longest_unchanged_options
         })
     except Exception as e:
         logger.error(f"Error in paraphrase_and_diversify: {str(e)}", exc_info=True)
@@ -478,32 +519,29 @@ def stats(task_id: str) -> str:
     try:
         session = _get_session(task_id)
         
-        matcher = difflib.SequenceMatcher(None, session.original_text.split(), session.current_text.split())
-        changed_words = []
-        longest_unchanged = []
+        from .diff_legend import process_legend
+        para_words = [{"word": w} for w in session.current_text.split(" ")]
+        para_words = process_legend(session.original_text, para_words)
         
-        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-            if tag == 'replace' or tag == 'insert':
-                changed_words.extend(session.current_text.split()[j1:j2])
-            elif tag == 'equal':
-                match_words = session.original_text.split()[i1:i2]
-                if len(match_words) > len(longest_unchanged):
-                    longest_unchanged = match_words
-                    
-        structural_changes = len(session.original_text.split('.')) != len(session.current_text.split('.'))
-        thesaurus_available = any(session.synonyms.values())
+        changed_words = [w["word"] for w in para_words if w.get("is_changed_word")]
+        structural_changes = any(w.get("is_structural_change") for w in para_words)
+        longest_unchanged_list = [w["word"] for w in para_words if w.get("in_longest_substring")]
+        unchanged_string = " ".join(longest_unchanged_list)
+        
+        longest_unchanged_options = _get_options_for_text(
+            unchanged_string, session.phrases, session.synonyms
+        )
         
         logger.info("Stats calculated successfully.")
         return _minify({
             "changed_words": changed_words,
             "structural_changes": structural_changes,
-            "longest_unchanged_words": " ".join(longest_unchanged),
-            "thesaurus_available": thesaurus_available,
+            "longest_unchanged_words": unchanged_string,
+            "longest_unchanged_options": longest_unchanged_options,
             "replaced_words_count": session.replaced_words_count,
             "mode": session.mode,
             "language": session.language,
-            "word_count": len(session.current_text.split()),
-            "character_count": len(session.current_text)
+            "word_count": len(session.current_text.split())
         })
     except Exception as e:
         logger.error(f"Error in stats: {str(e)}")

@@ -36,15 +36,29 @@ summarize_text(text="Artificial intelligence is the simulation of human intellig
 If the user explicitly requests you to heavily rewrite a text to bypass AI detectors or maximize diversity, you should use this macro tool instead of doing it manually step-by-step.
 - **Action:** Pass the `text`, `mode_name`, `iterations` (default 1), and a list of `protected_terms` (e.g., `["YOLOv8", "\cite"]`).
 - **How it works:** It paraphrases the text recursively `n` times to shatter the original structure, while passing the `protected_terms` securely to Quillbot's backend so they are never altered.
-- **Constraint:** This tool is stateless and does not automatically replace synonyms. Instead, it returns the final string, the `longest_unchanged_words`, and a `unified_diff`. It is your responsibility to read the `unified_diff` and the `longest_unchanged_words`. If the unchanged words pose a plagiarism risk, you must follow up by manually calling `list_replaceable_phrases(target_string=...)` to apply targeted, grammatically-safe synonyms yourself.
+- **Constraint:** This tool automatically caches the result and returns a `task_id`. It also returns the `longest_unchanged_options`. You can immediately pipe this `task_id` and the options into the `replace_many` tool to programmatically apply synonyms in one shot.
 
-**Example Usage:**
+**Example Usage (Piping into replace_many):**
 ```json
-// Tool Call
+// 1. Tool Call: Macro Rewrite
 paraphrase_and_diversify(text="The quick brown fox jumps.", mode_name="HUMANIZER", iterations=2, protected_terms=["fox"])
 
-// Tool Response
-{"final_text":"The swift auburn fox leaps.","legend_annotated_text":"The [swift](changed) [auburn](changed) fox [leaps.](changed)", "longest_unchanged_words_found":"fox", "word_stats": [...]}
+// 1. Tool Response
+{
+  "task_id": "c1bd9760",
+  "final_text": "The swift auburn fox leaps.",
+  "longest_unchanged_words_found": "fox leaps",
+  "longest_unchanged_options": [
+    {
+      "phrase_index": 3,
+      "current_phrase": "leaps",
+      "top_suggestions": [{"suggestion_index": 0, "text": "plunges"}]
+    }
+  ]
+}
+
+// 2. Immediate Follow-up Tool Call: Apply the suggestion directly!
+replace_many(task_id="c1bd9760", replacements=[{"phrase_index": 3, "suggestion_index": 0}])
 ```
 
 ---
@@ -68,7 +82,7 @@ If the user wants to rewrite text while maintaining your ability to perform surg
 - `input_lang` (string): The language of the text (e.g., `ENGLISH`, `SPANISH`, `FRENCH`). Must match the input text natively.
 - `synonyms_level` (int, 1-3): Defaults to 2. Level 1 changes few words; Level 3 is highly aggressive.
 - `frozen_words` (list of strings): Use this proactively to protect specific nouns or entities (e.g. `["Google", "Antigravity SDK"]`).
-- `include_stats` (bool): Defaults to `true`. Outputs `legend_annotated_text` and `word_stats` to show you exactly what changed.
+- `include_stats` (bool): Defaults to `true`. Outputs `longest_unchanged_words_found` and `longest_unchanged_options` to give immediate insight.
 
 **Example Usage:**
 ```json
@@ -76,7 +90,7 @@ If the user wants to rewrite text while maintaining your ability to perform surg
 paraphrase_text(text="The quick brown fox jumps over the lazy dog.", mode_name="FORMAL", synonyms_level=2, frozen_words=["fox"], include_stats=true)
 
 // Tool Response
-{"task_id":"433b1eae","text":"The swift brown fox leaps over the lethargic dog.", "legend_annotated_text": "The [swift](changed) brown fox [leaps](changed) over the [lethargic](changed) dog.", "word_stats": [...]}
+{"task_id":"433b1eae","text":"The swift brown fox leaps over the lethargic dog.", "longest_unchanged_words_found":"brown fox over the dog.", "longest_unchanged_options": [...]}
 ```
 **CRITICAL:** You must retain the `task_id` (`"433b1eae"`) in your internal reasoning; all subsequent tools strictly require it.
 
@@ -88,7 +102,7 @@ Once a document is initialized via `paraphrase_text`, your role shifts to a meti
 1. **Map the Document State:**
    **Tool:** `list_replaceable_phrases`
    - **Action:** Call this to see which phrases can be edited.
-   - **Targeting (Important):** Use the `target_string` filter to limit results to a specific sentence (e.g., the `longest_unchanged_words` from `stats`) so you don't get overwhelmed by a 500-word document.
+   - **Targeting (Important):** Use the `target_string` filter to limit results to a specific sentence (e.g., the `longest_unchanged_words_found` from `stats`) so you don't get overwhelmed by a 500-word document.
    **Example Response:**
    ```json
    {"phrases":[{"phrase_index":0,"current_phrase":"swift","suggestion_count":4,"top_suggestions":[{"suggestion_index":0,"text":"rapid"},{"suggestion_index":1,"text":"agile"}]}]}
@@ -125,7 +139,7 @@ Once a document is initialized via `paraphrase_text`, your role shifts to a meti
 Before presenting final text to the user, evaluate if the text meets the user's criteria.
 
 **Tool:** `stats`
-- **Agentic Action (Plagiarism):** If `longest_unchanged_words` is longer than 8 words, the paraphrase is too similar to the original input. You must actively remediate this by calling `list_replaceable_phrases(target_string="...")` on that exact string and applying synonyms to break it up.
+- **Agentic Action (Plagiarism):** If `longest_unchanged_words_found` is longer than 8 words, the paraphrase is too similar to the original input. You must actively remediate this by calling `list_replaceable_phrases(target_string="...")` on that exact string and applying synonyms to break it up.
 - **Agentic Action (Structural):** If the user requested a "deep rewrite" but `structural_changes` is `false`, you failed. Switch to `CREATIVE` or `HUMANIZER` mode and try again, or use the `paraphrase_and_diversify` macro.
 
 **Example Usage & Response:**
@@ -134,7 +148,7 @@ Before presenting final text to the user, evaluate if the text meets the user's 
 stats(task_id="433b1eae")
 
 // Tool Response
-{"changed_words":["swift","leaps","lethargic"],"structural_changes":false,"longest_unchanged_words":"brown fox over the dog.","thesaurus_available":true,"replaced_words_count":2,"mode":"FORMAL","language":"ENGLISH","word_count":9,"character_count":49}
+{"changed_words":["swift","leaps","lethargic"],"structural_changes":false,"longest_unchanged_words_found":"brown fox over the dog.", "longest_unchanged_options": [...], "replaced_words_count":2,"mode":"FORMAL","language":"ENGLISH","word_count":9}
 ```
 
 ---
