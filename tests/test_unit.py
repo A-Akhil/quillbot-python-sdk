@@ -50,12 +50,26 @@ _load_env()
 EMAIL = os.environ.get("QUILLBOT_EMAIL", "")
 PASSWORD = os.environ.get("QUILLBOT_PASSWORD", "")
 
+# Fallback to local credentials.json if env vars are missing
+if not EMAIL or not PASSWORD:
+    try:
+        import platformdirs
+        import json
+        from pathlib import Path
+        creds_path = Path(platformdirs.user_data_dir("quillbot")) / "credentials.json"
+        if creds_path.exists():
+            with open(creds_path, "r", encoding="utf-8") as f:
+                creds = json.load(f)
+                EMAIL = creds.get("email", "")
+                PASSWORD = creds.get("password", "")
+    except Exception:
+        pass
 
 @pytest.fixture(scope="session")
 def bot():
     """Yield an authenticated QuillBot client, then close it."""
     if not EMAIL or not PASSWORD:
-        pytest.skip("No credentials found. Set QUILLBOT_EMAIL and QUILLBOT_PASSWORD env vars or create .env file.")
+        pytest.skip("No credentials found. Set QUILLBOT_EMAIL and QUILLBOT_PASSWORD env vars or run uvx quillbot auth.")
     client = QuillBot(email=EMAIL, password=PASSWORD)
     print(f"\n[Auth] Successfully logged in. Premium account: {client.is_premium}")
     yield client
