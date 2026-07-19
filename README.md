@@ -134,6 +134,50 @@ summary = bot.summarize(long_text)
 print("Summary:", summary.summary)
 ```
 
+## Model Context Protocol (MCP) Server
+
+This SDK includes a fully featured MCP Server that allows AI assistants (like Claude Desktop, Cursor, and Google Antigravity) to directly use QuillBot's paraphrasing and synonym engines.
+
+The server operates entirely over `stdio` and requires no manual installation of files.
+
+### Authentication for AI Clients
+Because MCP servers run in the background, they need your QuillBot credentials. We provide a secure, one-time CLI login so you never have to pass your password to an AI agent or store it in plain text configuration files.
+
+Simply open your terminal and run:
+`uvx quillbot auth`
+
+*(It will securely prompt for your email and password and save an encrypted/local session token).*
+
+Alternatively, you can provide `QUILLBOT_EMAIL` and `QUILLBOT_PASSWORD` as environment variables if you prefer stateless execution.
+
+### 1. Claude Desktop
+Add the following to your `claude_desktop_config.json`:
+```json
+"mcpServers": {
+  "quillbot": {
+    "command": "uvx",
+    "args": ["quillbot"]
+  }
+}
+```
+
+### 2. Cursor
+In Cursor, navigate to **Settings > Features > MCP** and add a new server:
+- **Type**: `command`
+- **Name**: `quillbot`
+- **Command**: `uvx quillbot`
+
+### 3. Google Antigravity
+To instantly connect the server to Google Antigravity, run:
+```bash
+agy mcp add quillbot "uvx quillbot"
+```
+
+### 4. Agent Instructions & Workflows (Prompts)
+This server natively exposes a `quillbot_workflow` **MCP Prompt**. You do not need to download or configure any JSON files manually!
+- In **Claude Desktop**, simply click the **"Prompts"** (paperclip/menu) icon and select the **"Quillbot Workflow"** prompt. Claude will automatically read the official agent instructions.
+- In **Cursor** or **Antigravity**, you can ask the agent to "Fetch the `quillbot_workflow` prompt" to understand how to chain the macro tools together.
+
 ## Running Tests
 
 The test suite runs live integration tests against the actual QuillBot servers (as configured). Mocks are not used to ensure we accurately reflect the live API.

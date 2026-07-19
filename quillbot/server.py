@@ -30,13 +30,34 @@ def get_bot() -> QuillBot:
     global _bot
     if _bot is None:
         logger.info("Initializing QuillBot client...")
+        
+        # 1. Try Environment Variables
         email = os.environ.get("QUILLBOT_EMAIL")
         password = os.environ.get("QUILLBOT_PASSWORD")
+        
+        # 2. Try Local Credentials File
         if not email or not password:
-            logger.error("QUILLBOT_EMAIL and QUILLBOT_PASSWORD environment variables are not set.")
+            import platformdirs
+            import json
+            from pathlib import Path
+            
+            creds_path = Path(platformdirs.user_data_dir("quillbot")) / "credentials.json"
+            if creds_path.exists():
+                try:
+                    with open(creds_path, "r", encoding="utf-8") as f:
+                        creds = json.load(f)
+                        email = creds.get("email")
+                        password = creds.get("password")
+                except Exception as e:
+                    logger.error(f"Failed to read credentials.json: {e}")
+        
+        # 3. Fail loudly with instructions
+        if not email or not password:
+            logger.error("No credentials found.")
             raise RuntimeError(
-                "Please set QUILLBOT_EMAIL and QUILLBOT_PASSWORD environment variables."
+                "Authentication required. Please run `uvx quillbot auth` in your terminal to securely log in, or set the QUILLBOT_EMAIL and QUILLBOT_PASSWORD environment variables."
             )
+            
         _bot = QuillBot(email=email, password=password)
         logger.info("QuillBot client initialized successfully.")
     return _bot
@@ -609,6 +630,47 @@ def quillbot_workflow() -> str:
 
 def main():
     """Entry point for the MCP server."""
+    import sys
+    
+    if len(sys.argv) > 1 and sys.argv[1] == "auth":
+        import getpass
+        import platformdirs
+        import json
+        from pathlib import Path
+        from quillbot import QuillBot
+        
+        print("=== QuillBot CLI Authentication ===")
+        print("This will securely save your credentials locally so you don't need to pass them to AI agents.")
+        email = input("Email: ").strip()
+        password = getpass.getpass("Password: ")
+        
+        if not email or not password:
+            print("Error: Email and password cannot be empty.")
+            sys.exit(1)
+            
+        print("\nVerifying credentials...")
+        try:
+            # Test initialization
+            bot = QuillBot(email=email, password=password)
+            
+            # Save to disk
+            config_dir = Path(platformdirs.user_data_dir("quillbot"))
+            config_dir.mkdir(parents=True, exist_ok=True)
+            creds_path = config_dir / "credentials.json"
+            
+            with open(creds_path, "w", encoding="utf-8") as f:
+                json.dump({"email": email, "password": password}, f)
+                
+            # Restrict file permissions for security
+            creds_path.chmod(0o600)
+            
+            print(f"Success! Credentials securely saved to {creds_path}")
+            print("You can now run the MCP server without environment variables.")
+            sys.exit(0)
+        except Exception as e:
+            print(f"\nAuthentication failed: {e}")
+            sys.exit(1)
+
     logger.info("Starting QuillBot MCP Server...")
     mcp.run()
 
