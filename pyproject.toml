@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quillbot"
-version = "1.0.0"
+version = "1.0.1"
 description = "A comprehensive Python SDK for the QuillBot API."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,7 +12,7 @@ license = "GPL-3.0"
 dependencies = [
     "httpx>=0.27",
     "platformdirs>=4.0.0",
-    "mcp>=1.2.1",
+    "mcp>=1.2.1,<2",
 ]
 
 [project.scripts]

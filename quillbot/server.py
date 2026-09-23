@@ -6,15 +6,19 @@ import re
 import platformdirs
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Any
+from typing import Annotated, Dict, List, Optional, Any
+from pydantic import Field
 from mcp.server.fastmcp import FastMCP
 from quillbot import QuillBot
 from quillbot.endpoints import ParaphraseMode, Language
 import logging
 
-# Set up file logging so you can monitor what happens behind the scenes
+# Set up file logging so you can monitor what happens behind the scenes.
+# MCP clients may launch the server from an unwritable cwd (e.g. "/"), so log to the user log dir.
+LOG_DIR = Path(platformdirs.user_log_dir("quillbot_mcp"))
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
-    filename='quillbot_mcp.log',
+    filename=LOG_DIR / 'quillbot_mcp.log',
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
@@ -37,10 +41,6 @@ def get_bot() -> QuillBot:
         
         # 2. Try Local Credentials File
         if not email or not password:
-            import platformdirs
-            import json
-            from pathlib import Path
-            
             creds_path = Path(platformdirs.user_data_dir("quillbot")) / "credentials.json"
             if creds_path.exists():
                 try:
@@ -133,15 +133,21 @@ def _get_options_for_text(target_string: str, phrases: List[str], synonyms: dict
 # MCP Tools
 # ---------------------------------------------------------------------------
 
+# Shared argument types; descriptions are sent to MCP clients in each tool's input schema.
+TaskId = Annotated[str, Field(description="8-character hex session id returned by paraphrase_text or paraphrase_and_diversify.")]
+PhraseIndex = Annotated[int, Field(description="0-based index of a phrase in the session. Take it from list_replaceable_phrases, stats or longest_unchanged_options; do not guess.")]
+SuggestionIndex = Annotated[int, Field(description="0-based index into that phrase's suggestion list, from get_suggestions or top_suggestions.")]
+ModeName = Annotated[str, Field(description="Rewriting mode, case-insensitive: FLUENCY, STANDARD, CREATIVE, SHORTEN, EXPAND, FORMAL, SIMPLE, NARRATIVE, HUMANIZER, ACADEMIC, CUSTOM. Most modes except STANDARD and FLUENCY need QuillBot Premium. See list_options.")]
+
 @mcp.tool()
 def paraphrase_text(
-    text: str,
-    mode_name: str = "STANDARD",
-    synonyms_level: int = 2,
-    custom_mode_name: Optional[str] = None,
-    frozen_words: Optional[List[str]] = None,
-    input_lang: str = "ENGLISH",
-    include_stats: bool = True
+    text: Annotated[str, Field(description="Text to paraphrase. Any length; it is split into sentences and paraphrased in parallel.")],
+    mode_name: ModeName = "STANDARD",
+    synonyms_level: Annotated[int, Field(description="Which of QuillBot's candidate rewrites to use: 0 = first candidate, 1 = second, ... Useful range 0-3; out-of-range values are clamped.")] = 2,
+    custom_mode_name: Annotated[Optional[str], Field(description="Accepted but currently ignored.")] = None,
+    frozen_words: Annotated[Optional[List[str]], Field(description='Words or phrases that must stay exactly unchanged, e.g. ["YOLOv8", "New York"].')] = None,
+    input_lang: Annotated[str, Field(description="Output language name, case-insensitive (ENGLISH, ENGLISH_UK, FRENCH, GERMAN, ...; see list_options). A non-English value translates. Unknown names fall back to ENGLISH.")] = "ENGLISH",
+    include_stats: Annotated[bool, Field(description="Also return longest_unchanged_words_found (run of 4+ words still identical to the input) and longest_unchanged_options (synonyms for phrases in it).")] = True
 ) -> str:
     """
     Initialize a new document session by paraphrasing text. This is the entry point.
@@ -210,10 +216,10 @@ def paraphrase_text(
 
 @mcp.tool()
 def paraphrase_and_diversify(
-    text: str,
-    mode_name: str = "STANDARD",
-    iterations: int = 1,
-    protected_terms: Optional[List[str]] = None
+    text: Annotated[str, Field(description="Text to rewrite.")],
+    mode_name: ModeName = "STANDARD",
+    iterations: Annotated[int, Field(description="Number of paraphrase passes, each rewriting the previous output. Values below 1 count as 1. Each pass costs a full set of QuillBot requests; 1-3 is sensible.")] = 1,
+    protected_terms: Annotated[Optional[List[str]], Field(description="Terms never changed in any pass (same as frozen_words).")] = None
 ) -> str:
     """
     Macro tool that performs deep, recursive paraphrasing. It loops the text through Quillbot 'iterations' times while strictly protecting 'protected_terms'. Returns a JSON string containing a newly generated `task_id`, the final text, the longest unchanged string (for potential manual synonym swapping), and `longest_unchanged_options`. Use this `task_id` with `replace_many` or `stats`.
@@ -293,7 +299,7 @@ def paraphrase_and_diversify(
         return _minify({"error": str(e)})
 
 @mcp.tool()
-def summarize_text(text: str) -> str:
+def summarize_text(text: Annotated[str, Field(description="Text to summarize. Produces a short abstractive summary; no session is created.")]) -> str:
     """
     Condense long texts into brief, readable summaries. Does not create a document session.
     """
@@ -309,9 +315,9 @@ def summarize_text(text: str) -> str:
 
 @mcp.tool()
 def list_replaceable_phrases(
-    task_id: str,
-    target_string: Optional[str] = None,
-    max_suggestions: int = 3
+    task_id: TaskId,
+    target_string: Annotated[Optional[str], Field(description="Only list phrases inside this substring of the current text (e.g. one sentence). If not found, the whole text is searched.")] = None,
+    max_suggestions: Annotated[int, Field(description="How many suggestions to include per phrase (the first N). suggestion_count always shows the total.")] = 3
 ) -> str:
     """
     Returns a JSON string listing phrases in the document that can be interactively replaced with synonyms.
@@ -349,7 +355,7 @@ def list_replaceable_phrases(
         return _minify({"error": str(e)})
 
 @mcp.tool()
-def get_suggestions(task_id: str, phrase_index: int) -> str:
+def get_suggestions(task_id: TaskId, phrase_index: PhraseIndex) -> str:
     """
     Fetch the context-aware synonym suggestions available for a specific phrase index in the document session.
     """
@@ -401,7 +407,7 @@ def _apply_replacement(session: DocumentSession, phrase_index: int, suggestion_i
     return session.current_text
 
 @mcp.tool()
-def replace_synonym(task_id: str, phrase_index: int, suggestion_index: int) -> str:
+def replace_synonym(task_id: TaskId, phrase_index: PhraseIndex, suggestion_index: SuggestionIndex) -> str:
     """
     Replace a specific occurrence in the cached document with one of QuillBot's available suggestions. Returns the updated text in a JSON string.
     """
@@ -418,7 +424,10 @@ def replace_synonym(task_id: str, phrase_index: int, suggestion_index: int) -> s
         return _minify({"error": str(e)})
 
 @mcp.tool()
-def replace_many(task_id: str, replacements: List[Dict[str, int]]) -> str:
+def replace_many(
+    task_id: TaskId,
+    replacements: Annotated[List[Dict[str, int]], Field(description='List of {"phrase_index": int, "suggestion_index": int}, applied in order. All-or-nothing: one invalid index discards the whole batch. One undo reverts the whole batch.')]
+) -> str:
     """
     Apply multiple synonym replacements in a single batch operation. Returns the updated text in a JSON string.
     Expects a list of dicts: [{"phrase_index": 0, "suggestion_index": 1}, ...]
@@ -442,7 +451,7 @@ def replace_many(task_id: str, replacements: List[Dict[str, int]]) -> str:
         return _minify({"error": str(e)})
 
 @mcp.tool()
-def refresh_phrase(task_id: str, phrase_index: int) -> str:
+def refresh_phrase(task_id: TaskId, phrase_index: PhraseIndex) -> str:
     """
     Make a network request to QuillBot to fetch or refresh context-aware synonym suggestions for a specific phrase. Returns JSON string of suggestions.
     """
@@ -469,7 +478,7 @@ def refresh_phrase(task_id: str, phrase_index: int) -> str:
         return _minify({"error": str(e)})
 
 @mcp.tool()
-def get_document(task_id: str) -> str:
+def get_document(task_id: TaskId) -> str:
     """
     Retrieve the current full state of the document session, including the text, available phrases, active mode, and language.
     """
@@ -487,7 +496,7 @@ def get_document(task_id: str) -> str:
         return _minify({"error": str(e)})
 
 @mcp.tool()
-def undo(task_id: str) -> str:
+def undo(task_id: TaskId) -> str:
     """
     Undo the last synonym replacement operation, reverting the document to its previous state.
     """
@@ -507,7 +516,7 @@ def undo(task_id: str) -> str:
         return _minify({"error": str(e)})
 
 @mcp.tool()
-def reset(task_id: str) -> str:
+def reset(task_id: TaskId) -> str:
     """
     Completely reset the document session back to the original paraphrased text, discarding all interactive edits.
     """
@@ -529,7 +538,7 @@ def reset(task_id: str) -> str:
         return _minify({"error": str(e)})
 
 @mcp.tool()
-def stats(task_id: str) -> str:
+def stats(task_id: TaskId) -> str:
     """
     Retrieve analytical statistics about the document session. This includes QuillBot's specific text analysis metrics to help the LLM decide what to edit.
     """
@@ -566,7 +575,7 @@ def stats(task_id: str) -> str:
         return _minify({"error": str(e)})
 
 @mcp.tool()
-def export(task_id: str) -> str:
+def export(task_id: TaskId) -> str:
     """
     Export the final document session state, returning the current text, original text, and metadata.
     """
@@ -585,7 +594,7 @@ def export(task_id: str) -> str:
         return _minify({"error": str(e)})
 
 @mcp.tool()
-def delete_task(task_id: str) -> str:
+def delete_task(task_id: TaskId) -> str:
     """
     Explicitly delete a document session from the cache to free up memory.
     """
@@ -631,14 +640,22 @@ def quillbot_workflow() -> str:
 def main():
     """Entry point for the MCP server."""
     import sys
-    
+
+    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
+        from string import Template
+        help_text = (Path(__file__).parent / "mcp_resources" / "cli_help.txt").read_text(encoding="utf-8")
+        print(Template(help_text).safe_substitute(
+            creds=Path(platformdirs.user_data_dir("quillbot")) / "credentials.json",
+            log=LOG_DIR / "quillbot_mcp.log",
+            cache=CACHE_DIR,
+            modes=", ".join(ParaphraseMode.__members__),
+            languages=", ".join(Language.__members__),
+        ))
+        sys.exit(0)
+
     if len(sys.argv) > 1 and sys.argv[1] == "auth":
         import getpass
-        import platformdirs
-        import json
-        from pathlib import Path
-        from quillbot import QuillBot
-        
+
         print("=== QuillBot CLI Authentication ===")
         print("This will securely save your credentials locally so you don't need to pass them to AI agents.")
         email = input("Email: ").strip()

@@ -1,0 +1,509 @@
+QUILLBOT - MCP server and Python SDK for QuillBot (unofficial)
+==============================================================
+
+Lets AI assistants (Claude, Cursor, VS Code, Antigravity, Codex, ...) and
+Python programs paraphrase, humanize, translate, summarize and fine-edit text
+with QuillBot. This help is the complete reference: every command, every MCP
+tool, every argument, its type, default, allowed values and limits, and
+exactly what comes back.
+
+Contents
+  1. Commands
+  2. Setup (install, log in, connect a client)
+  3. How the MCP server works (sessions, task_id, indexes, errors)
+  4. MCP tool reference (16 tools)
+  5. MCP prompt
+  6. Modes and languages
+  7. Recommended workflows
+  8. Python SDK
+  9. Files, environment variables, updating
+ 10. Limits and known quirks
+
+
+1. COMMANDS
+-----------
+  quillbot
+      Start the MCP server on stdin/stdout. MCP clients run this for you.
+      Started by hand it prints nothing and waits for a client; press Ctrl+C.
+
+  quillbot auth
+      Interactive login. Asks for your QuillBot email and password, logs in
+      to QuillBot to check them, then saves them for the MCP server.
+      Exit code 0 on success, 1 on empty input or a failed login.
+
+  quillbot -h | --help
+      Print this reference and exit.
+
+  Any other argument is ignored and starts the MCP server.
+  Via uvx (no install needed) prefix every command with uvx:
+      uvx quillbot auth      uvx quillbot --help
+
+
+2. SETUP
+--------
+  Nothing needs to be cloned. MCP clients launch `uvx quillbot`; uvx
+  downloads the `quillbot` package from PyPI on first use and caches it.
+
+  Step 1  Install uv (provides uvx), once:
+              pip install uv
+
+  Step 2  Log in once (recommended; keeps your password out of client configs):
+              uvx quillbot auth
+          or instead put credentials in the client config "env" block:
+              "env": {"QUILLBOT_EMAIL": "you@example.com", "QUILLBOT_PASSWORD": "..."}
+
+  Step 3  Connect a client, then restart or reload it.
+
+    Claude Code      claude mcp add quillbot -- uvx quillbot
+    Codex CLI        codex mcp add quillbot -- uvx quillbot
+                     or ~/.codex/config.toml:
+                         [mcp_servers.quillbot]
+                         command = "uvx"
+                         args = ["quillbot"]
+    VS Code          code --add-mcp '{"name":"quillbot","command":"uvx","args":["quillbot"]}'
+                     or .vscode/mcp.json (note the key is "servers"):
+                         {"servers": {"quillbot": {"type": "stdio", "command": "uvx", "args": ["quillbot"]}}}
+
+    All other clients use this block:
+        {"mcpServers": {"quillbot": {"command": "uvx", "args": ["quillbot"]}}}
+    in this file:
+      Claude Desktop   claude_desktop_config.json (Settings > Developer > Edit Config)
+      Cursor           ~/.cursor/mcp.json          (one project: .cursor/mcp.json)
+      Windsurf         ~/.codeium/windsurf/mcp_config.json
+      Antigravity      ~/.gemini/config/mcp_config.json
+                       (Agent panel > ... > MCP Servers > Manage MCP Servers > View raw config)
+      Gemini CLI       ~/.gemini/settings.json     (one project: .gemini/settings.json)
+    If the file already lists servers, add "quillbot": {...} inside the
+    existing "mcpServers" object.
+
+  Troubleshooting
+    "spawn uvx ENOENT" / command not found
+        The client cannot see your shell PATH (common for desktop apps on
+        macOS). Use the full path printed by `which uvx` as "command".
+    Tool returns "Authentication required"
+        Run `uvx quillbot auth`, or set the env block, then restart the client.
+    Anything else
+        Read the log file (see section 9).
+
+
+3. HOW THE MCP SERVER WORKS
+---------------------------
+  Sessions and task_id
+    paraphrase_text and paraphrase_and_diversify create a document session
+    and return a task_id: 8 lowercase hex characters, e.g. "433b1eae".
+    Every editing tool takes that task_id. A session holds the original
+    text, the current text, the phrase list, the synonym suggestions per
+    phrase, and the undo history. Sessions are JSON files on disk, so they
+    survive client and server restarts. They never expire; remove them with
+    delete_task.
+
+  Phrases and indexes
+    QuillBot splits the paraphrased text into phrases (a word or a short
+    group of words). phrase_index is the 0-based position of a phrase in the
+    session's phrase list; suggestion_index is the 0-based position of a
+    synonym in that phrase's suggestion list. Always take both numbers from
+    a tool response (list_replaceable_phrases, get_suggestions, stats,
+    longest_unchanged_options); do not guess them.
+    Valid range: 0 <= phrase_index < number of phrases,
+                 0 <= suggestion_index < number of suggestions for that phrase.
+
+  What needs the network
+    Calls QuillBot:  paraphrase_text, paraphrase_and_diversify,
+                     summarize_text, refresh_phrase
+    Local only:      every other tool (instant, no QuillBot quota used)
+
+  Responses
+    Every tool returns one line of compact JSON as text.
+    On failure the JSON is {"error": "<message>"} (the MCP call itself
+    succeeds). Exception: when no credentials are configured, the network
+    tools fail as an MCP tool error with the "Authentication required"
+    message.
+
+  Argument names and case
+    mode_name and input_lang are case-insensitive names from section 6.
+    Integers must be JSON numbers, lists must be JSON arrays.
+
+
+4. MCP TOOL REFERENCE
+---------------------
+  Notation:  name: type = default  (required when there is no default)
+
+  ---- Creating documents ---------------------------------------------------
+
+  paraphrase_text
+    Paraphrase text and open a new session. The usual entry point.
+    Arguments
+      text: string                    (required)
+          Text to rewrite. Any length: QuillBot splits it into sentences
+          and they are paraphrased in parallel (up to 15 at a time), then
+          joined back in order.
+      mode_name: string = "STANDARD"
+          Rewriting style, one name from section 6. Unknown name ->
+          {"error": "Invalid mode_name: <name>"}.
+      synonyms_level: integer = 2
+          Which of QuillBot's candidate rewrites becomes the output.
+          QuillBot returns several candidates per sentence; 0 takes the
+          first, 1 the second, and so on. Useful range 0-3. Values above
+          the number of candidates use the last one; negatives use 0.
+          Other candidates are not returned by this tool.
+      custom_mode_name: string | null = null
+          Accepted but currently ignored (see section 10).
+      frozen_words: array of strings | null = null
+          Words or phrases QuillBot must leave exactly as they are,
+          e.g. ["YOLOv8", "Python", "New York"].
+      input_lang: string = "ENGLISH"
+          Language name from section 6; hyphens are accepted
+          ("english-uk" = "ENGLISH_UK"). QuillBot writes the output in this
+          language, so a non-English value also translates. Unknown names
+          silently fall back to ENGLISH.
+      include_stats: boolean = true
+          Also compute the longest unchanged run (see stats) and return it
+          with ready-to-use synonym options.
+    Returns
+      {"task_id": "433b1eae",
+       "text": "<paraphrased text>",
+       "longest_unchanged_words_found": "<words>",    only if include_stats
+       "longest_unchanged_options": [                  only if include_stats
+          {"phrase_index": 1, "current_phrase": "brown",
+           "top_suggestions": [{"suggestion_index": 0, "text": "auburn"}]}]}
+    Example call
+      {"text": "The quick brown fox jumps over the lazy dog.",
+       "mode_name": "FORMAL", "frozen_words": ["fox"]}
+
+  paraphrase_and_diversify
+    Paraphrase the text several times in a row (each pass rewrites the
+    previous output) to move it far from the original, while protecting
+    terms. Opens a new session.
+    Arguments
+      text: string                    (required)
+      mode_name: string = "STANDARD"
+          Same names as paraphrase_text. Unknown -> {"error": ...}.
+      iterations: integer = 1
+          Number of passes. Values below 1 are treated as 1. No upper
+          limit, but every pass is a full set of QuillBot requests, so time
+          and quota grow linearly; 1-3 is sensible.
+      protected_terms: array of strings | null = null
+          Same as frozen_words: never changed in any pass.
+    Fixed internally: synonyms_level 2, language ENGLISH.
+    Returns
+      {"task_id": "...",
+       "final_text": "<text after the last pass>",
+       "longest_unchanged_words_found": "<words, compared with the input>",
+       "longest_unchanged_options": [ same shape as paraphrase_text ]}
+    Example call
+      {"text": "...", "mode_name": "STANDARD", "iterations": 2,
+       "protected_terms": ["\\cite", "YOLOv8"]}
+
+  summarize_text
+    Summarize text. Does NOT create a session; there is no task_id and the
+    editing tools cannot be used on the result.
+    Arguments
+      text: string                    (required)
+    Fixed internally: abstractive summary, ratio 0.2, length "short".
+    Returns
+      {"summary": "<summary text>"}
+
+  ---- Finding what to edit (local) ------------------------------------------
+
+  list_replaceable_phrases
+    List the phrases in the current text that have synonym suggestions.
+    Arguments
+      task_id: string                 (required)
+      target_string: string | null = null
+          Only return phrases that occur inside this substring of the
+          current text (e.g. one sentence). If the substring is not found in
+          the current text, the whole text is searched instead.
+      max_suggestions: integer = 3
+          How many suggestions to show per phrase (the first N). 0 gives
+          empty lists; suggestion_count still shows the total.
+    Returns
+      {"phrases": [
+         {"phrase_index": 4, "current_phrase": "jumps",
+          "suggestion_count": 7,
+          "top_suggestions": [{"suggestion_index": 0, "text": "leaps"}, ...]}]}
+      Phrases without suggestions are left out. Matching is by substring,
+      so a very short phrase can also match inside a longer word.
+
+  get_suggestions
+    All cached suggestions for one phrase.
+    Arguments
+      task_id: string                 (required)
+      phrase_index: integer           (required)
+    Returns
+      {"current_phrase": "jumps",
+       "suggestions": [{"suggestion_index": 0, "text": "leaps"}, ...]}
+      Out of range -> {"error": "phrase_index out of bounds."}
+
+  refresh_phrase
+    Ask QuillBot again for suggestions for one phrase, in the context of
+    the current text and the session's mode (network call). New
+    suggestions are merged into the session.
+    Arguments
+      task_id: string                 (required)
+      phrase_index: integer           (required)
+    Returns
+      Same as get_suggestions.
+
+  stats
+    Compare the current text with the original to decide what to edit.
+    Arguments
+      task_id: string                 (required)
+    Returns
+      {"changed_words": ["swift", "leaps"],
+       "structural_changes": false,
+       "longest_unchanged_words": "brown fox over the dog.",
+       "longest_unchanged_options": [ same shape as paraphrase_text ],
+       "replaced_words_count": 1,
+       "mode": "FORMAL", "language": "ENGLISH", "word_count": 9}
+    How each value is computed (same rules as the QuillBot website legend)
+      changed_words         Words of the current text (letters and digits
+                            only, lower-cased, "'s" removed) that do not
+                            appear anywhere in the original text.
+      longest_unchanged_words
+                            The longest run of text shared word-for-word
+                            with the original. Threshold: the run must be
+                            at least 4 words long, otherwise "".
+                            A long run means that passage is still close to
+                            the original; edit it first.
+      longest_unchanged_options
+                            Phrases inside that run that have suggestions
+                            (first 3 each), ready for replace_many.
+      structural_changes    true when word order was rearranged compared
+                            with the original (short function words such as
+                            "the", "of", "and" are ignored).
+      replaced_words_count  Synonym replacements applied so far.
+      word_count            Words in the current text (split on spaces).
+
+  get_document
+    Current state of a session.
+    Arguments
+      task_id: string                 (required)
+    Returns
+      {"text": "...", "mode": "FORMAL", "language": "ENGLISH",
+       "available_phrase_count": 12}
+      available_phrase_count = phrases that have at least one suggestion.
+
+  ---- Editing (local) --------------------------------------------------------
+
+  replace_synonym
+    Replace one phrase with one of its suggestions.
+    Arguments
+      task_id: string                 (required)
+      phrase_index: integer           (required)
+      suggestion_index: integer       (required)
+    Behaviour
+      Replaces the first whole-word occurrence of the phrase in the current
+      text (falls back to the first plain occurrence). The phrase entry then
+      holds the new text and keeps the same suggestion list, so the same
+      phrase_index can be swapped again. If the phrase is no longer in the
+      text, the text is unchanged. The previous text is pushed to the undo
+      history.
+    Returns
+      {"text": "<updated text>"}
+      Bad index -> {"error": "phrase_index out of bounds."} or
+                   {"error": "suggestion_index out of bounds."}
+
+  replace_many
+    Apply several replacements in one call.
+    Arguments
+      task_id: string                 (required)
+      replacements: array of objects  (required)
+          [{"phrase_index": 1, "suggestion_index": 0},
+           {"phrase_index": 4, "suggestion_index": 2}]
+          Applied in order. Items missing either key are skipped.
+    Behaviour
+      All-or-nothing: if any item has an invalid index, an error is
+      returned and none of the batch is saved. The whole batch is a single
+      undo step.
+    Returns
+      {"text": "<updated text>"}
+
+  undo
+    Revert the last replace_synonym or replace_many call.
+    Arguments
+      task_id: string                 (required)
+    Returns
+      {"text": "<previous text>"}   or {"error": "No history to undo."}
+    Note: only the text is reverted (see section 10).
+
+  reset
+    Return to the text as it was before the first edit, clear the undo
+    history and set replaced_words_count to 0. With no edits it just
+    returns the current text.
+    Arguments
+      task_id: string                 (required)
+    Returns
+      {"text": "<text before any edits>"}
+
+  ---- Finishing and housekeeping (local) -------------------------------------
+
+  export
+    Final result of a session.
+    Arguments
+      task_id: string                 (required)
+    Returns
+      {"original_text": "...", "final_text": "...", "mode": "FORMAL",
+       "language": "ENGLISH", "edits_made": 3}
+
+  delete_task
+    Delete a session from disk.
+    Arguments
+      task_id: string                 (required)
+    Returns
+      {"success": true}   (false if the task_id did not exist)
+
+  list_tasks
+    All sessions stored on disk, including ones from earlier runs.
+    Arguments
+      none
+    Returns
+      {"active_tasks": ["433b1eae", "9f0c11d2"]}
+
+  list_options
+    Valid mode_name and input_lang values.
+    Arguments
+      none
+    Returns
+      {"modes": [...], "languages": [...]}
+
+
+5. MCP PROMPT
+-------------
+  quillbot_workflow  (no arguments)
+    Returns the full agent instructions plus a worked example workflow.
+    In Claude Desktop pick it from the prompts menu; in other clients ask
+    the agent to "fetch the quillbot_workflow prompt".
+
+
+6. MODES AND LANGUAGES
+----------------------
+  mode_name values
+    $modes
+
+    STANDARD   balanced rewrite (default)
+    FLUENCY    minimal changes, fixes grammar and flow
+    CREATIVE   bigger changes in wording
+    SHORTEN    makes the text shorter
+    EXPAND     makes the text longer
+    FORMAL     more formal tone
+    SIMPLE     plainer wording
+    ACADEMIC   academic tone
+    HUMANIZER  AI Humanizer: makes AI-sounding text read more naturally
+    NARRATIVE  same QuillBot mode as HUMANIZER (see section 10)
+    CUSTOM     custom mode (custom text is not sent yet, see section 10)
+
+    QuillBot decides which modes your account may use. Free accounts
+    normally get STANDARD and FLUENCY; the rest usually need Premium and
+    otherwise fail with a QuillBot error.
+
+  input_lang values
+    $languages
+
+    ENGLISH is the default. ENGLISH_US / _UK / _AU / _CA pick a dialect.
+
+
+7. RECOMMENDED WORKFLOWS
+------------------------
+  Simple rewrite
+    1. paraphrase_text {"text": ..., "mode_name": "STANDARD"}
+    2. Use "text" from the response.
+    3. delete_task {"task_id": ...}
+
+  Rewrite and polish (most control)
+    1. paraphrase_text                -> keep task_id
+    2. stats                          -> look at longest_unchanged_words
+    3. replace_many with phrase_index/suggestion_index pairs taken from
+       longest_unchanged_options (or from list_replaceable_phrases)
+    4. stats again; repeat 3 until longest_unchanged_words is "" or short
+    5. undo if a replacement reads badly
+    6. export -> final_text
+    7. delete_task
+
+  Heavy rewrite with protected terms
+    1. paraphrase_and_diversify {"text": ..., "iterations": 2,
+                                 "protected_terms": ["BrandName"]}
+    2. replace_many with its longest_unchanged_options
+    3. export, then delete_task
+
+  Better synonyms for one spot
+    list_replaceable_phrases {"task_id": ..., "target_string": "<sentence>"}
+    -> refresh_phrase for a phrase whose suggestions are poor
+    -> replace_synonym
+
+  Summary only
+    summarize_text {"text": ...}
+
+
+8. PYTHON SDK
+-------------
+  pip install quillbot
+
+    from quillbot import QuillBot
+    from quillbot.endpoints import ParaphraseMode, Language
+
+    bot = QuillBot(email="you@example.com", password="...")
+    print(bot.is_premium)
+
+    r = bot.paraphrase("Text to rewrite.",
+                       mode=ParaphraseMode.FORMAL,   # default STANDARD
+                       synonyms_level=0,             # SDK default 0, 0-3
+                       frozen_words=["Text"],
+                       input_lang=Language.ENGLISH,
+                       fetch_synonyms=True)          # fill r.synonyms
+    r.paraphrased_text        # main result
+    r.alternatives            # other candidates
+    r.phrases                 # phrase list
+    r.synonyms                # {phrase: [suggestions]}
+    r.available_replacements("Text")
+
+    s = bot.summarize("Long text ...",
+                      summary_type="abs",   # "abs" abstractive, "key" key sentences
+                      ratio=0.2,            # 0.0-1.0 target size
+                      length="short")       # "short", "concise", "long"
+    s.summary
+
+    bot.translate("Hello", Language.FRENCH).paraphrased_text
+
+  The client logs in, refreshes its tokens automatically, and can be used
+  as a context manager:  with QuillBot(email=..., password=...) as bot: ...
+  Errors: QuillBotError (base), AuthenticationError, RateLimitError, APIError.
+
+
+9. FILES, ENVIRONMENT VARIABLES, UPDATING
+-----------------------------------------
+  Credentials  $creds
+               Written by `quillbot auth`. Plain text (not encrypted),
+               readable only by your user. Delete it to log out.
+  Log          $log
+               Every tool call and error. Check it when a client shows the
+               server as failed.
+  Sessions     $cache
+               One <task_id>.json per session.
+
+  QUILLBOT_EMAIL, QUILLBOT_PASSWORD
+               If both are set they are used instead of the credentials
+               file.
+
+  Updating     uvx keeps using its cached copy. To get a new release run
+                   uv cache clean quillbot
+               and restart the client, or use "args": ["quillbot@latest"]
+               in the client config to check PyPI on every start.
+
+
+10. LIMITS AND KNOWN QUIRKS
+---------------------------
+  - Unofficial: this talks to QuillBot's website API. If QuillBot changes
+    or blocks it (for example a Cloudflare "Just a moment..." HTTP 403),
+    the network tools return that error.
+  - When paraphrasing long text, a sentence that fails is kept unchanged
+    silently instead of failing the whole call.
+  - custom_mode_name is accepted by paraphrase_text but not sent to
+    QuillBot yet.
+  - NARRATIVE and HUMANIZER share QuillBot mode id 12; both run the
+    AI Humanizer.
+  - undo and reset restore the text only. The phrase list keeps the
+    replaced words, so call list_replaceable_phrases again afterwards
+    before choosing new indexes.
+  - Sessions stay on disk until delete_task; list_tasks shows them.
+
+Docs and source: https://github.com/A-Akhil/quillbot-python-sdk

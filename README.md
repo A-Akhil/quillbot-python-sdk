@@ -1,3 +1,4 @@
+<!-- mcp-name: io.github.A-Akhil/quillbot -->
 # QuillBot Python SDK
 
 
@@ -64,15 +65,15 @@ text = "The quick brown fox jumps over the lazy dog."
 
 # Standard Paraphrasing with Synonyms Level 2
 result = bot.paraphrase(text, mode=ParaphraseMode.STANDARD, synonyms_level=2)
-print(f"Paraphrased: {result.text}")
+print(f"Paraphrased: {result.paraphrased_text}")
 
 # AI Humanizer
 humanized_result = bot.paraphrase(text, mode=ParaphraseMode.HUMANIZER)
-print(f"Humanized: {humanized_result.text}")
+print(f"Humanized: {humanized_result.paraphrased_text}")
 
 # Custom Modes
 custom_result = bot.paraphrase(text, mode=ParaphraseMode.CUSTOM, custom_mode_name="Shakespearean")
-print(f"Custom Output: {custom_result.text}")
+print(f"Custom Output: {custom_result.paraphrased_text}")
 
 # View the individual phrases that were rewritten
 print(f"Phrases found: {result.phrases}")
@@ -94,7 +95,7 @@ result = bot.paraphrase(
     input_lang=Language.FRENCH
 )
 
-print(f"French Translation: {result.text}")
+print(f"French Translation: {result.paraphrased_text}")
 ```
 
 ### Interactive Editing (Synonym Suggestions)
@@ -140,43 +141,99 @@ This SDK includes a fully featured MCP Server that allows AI assistants (like Cl
 
 The server operates entirely over `stdio` and requires no manual installation of files.
 
+### How it works
+You do not need to clone this repository or `pip install` anything. Every client below is configured with the command `uvx quillbot`. When the client starts, it runs that command; `uvx` downloads the `quillbot` package from PyPI into a private cache (first run only), starts the MCP server, and the client talks to it over stdin/stdout. `uvx` keeps using its cached copy; to pick up a newer release, run `uv cache clean quillbot` and restart your client, or use `"args": ["quillbot@latest"]` in your client config to check PyPI on every start.
+
+So setup is always the same three steps:
+1. Install `uv` once (`pip install uv` or see the [uv docs](https://docs.astral.sh/uv/)).
+2. Log in once with `uvx quillbot auth` (see below).
+3. Add `uvx quillbot` to your client using the instructions for that client.
+
+Run `uvx quillbot --help` for the complete reference: every MCP tool with all its arguments, types, defaults, allowed values, limits and response formats, plus workflows, SDK usage and file locations.
+
+### Troubleshooting `uvx`
+If your client reports `spawn uvx ENOENT`, the client cannot see your shell `PATH` (common for desktop apps on macOS). Replace `"uvx"` in the configs below with the full path printed by `which uvx`.
+
 ### Authentication for AI Clients
-Because MCP servers run in the background, they need your QuillBot credentials. We provide a secure, one-time CLI login so you never have to pass your password to an AI agent or store it in plain text configuration files.
+Because MCP servers run in the background, they need your QuillBot credentials. Run the one-time CLI login in your terminal so you never have to paste your password into an AI chat:
 
-Simply open your terminal and run:
-`uvx quillbot auth`
+```bash
+uvx quillbot auth
+```
 
-*(It will securely prompt for your email and password and save an encrypted/local session token).*
+It prompts for your email and password, verifies them against QuillBot, and saves them to a local `credentials.json` in your user data directory, readable only by your user (permissions `600`). The file is not encrypted.
 
-Alternatively, you can provide `QUILLBOT_EMAIL` and `QUILLBOT_PASSWORD` as environment variables if you prefer stateless execution.
+Alternatively, set `QUILLBOT_EMAIL` and `QUILLBOT_PASSWORD` in the `env` block of your client config:
+```json
+"env": { "QUILLBOT_EMAIL": "you@example.com", "QUILLBOT_PASSWORD": "..." }
+```
 
 ### 1. Claude Desktop
-Add the following to your `claude_desktop_config.json`:
+Add the following to your `claude_desktop_config.json` (Settings > Developer > Edit Config), then restart Claude Desktop:
 ```json
-"mcpServers": {
-  "quillbot": {
-    "command": "uvx",
-    "args": ["quillbot"]
+{
+  "mcpServers": {
+    "quillbot": {
+      "command": "uvx",
+      "args": ["quillbot"]
+    }
   }
 }
 ```
 
-### 2. Cursor
-In Cursor, navigate to **Settings > Features > MCP** and add a new server:
-- **Type**: `command`
-- **Name**: `quillbot`
-- **Command**: `uvx quillbot`
-
-### 3. Google Antigravity
-To instantly connect the server to Google Antigravity, run:
+### 2. Claude Code
 ```bash
-agy mcp add quillbot "uvx quillbot"
+claude mcp add quillbot -- uvx quillbot
 ```
 
-### 4. Agent Instructions & Workflows (Prompts)
+### 3. Cursor, Windsurf, Google Antigravity, Gemini CLI
+These clients all use the same `mcpServers` block shown above. Paste it into the client's config file and restart or reload the client:
+
+| Client | Config file | Where to find it in the UI |
+|---|---|---|
+| Cursor | `~/.cursor/mcp.json` (all projects) or `.cursor/mcp.json` (one project) | Settings > MCP |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` | Settings > Cascade > MCP Servers > View raw config |
+| Google Antigravity | `~/.gemini/config/mcp_config.json` | Agent panel > ... > MCP Servers > Manage MCP Servers > View raw config |
+| Gemini CLI | `~/.gemini/settings.json` (all projects) or `.gemini/settings.json` (one project) | - |
+
+If the file already has other servers, add the `"quillbot": {...}` entry inside the existing `mcpServers` object.
+
+### 4. VS Code (GitHub Copilot)
+VS Code uses `servers` instead of `mcpServers`. Either run:
+```bash
+code --add-mcp '{"name":"quillbot","command":"uvx","args":["quillbot"]}'
+```
+or add this to `.vscode/mcp.json` in your project:
+```json
+{
+  "servers": {
+    "quillbot": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["quillbot"]
+    }
+  }
+}
+```
+
+### 5. OpenAI Codex CLI
+```bash
+codex mcp add quillbot -- uvx quillbot
+```
+or add to `~/.codex/config.toml`:
+```toml
+[mcp_servers.quillbot]
+command = "uvx"
+args = ["quillbot"]
+```
+
+### 6. Agent Instructions & Workflows (Prompts)
 This server natively exposes a `quillbot_workflow` **MCP Prompt**. You do not need to download or configure any JSON files manually!
 - In **Claude Desktop**, simply click the **"Prompts"** (paperclip/menu) icon and select the **"Quillbot Workflow"** prompt. Claude will automatically read the official agent instructions.
 - In **Cursor** or **Antigravity**, you can ask the agent to "Fetch the `quillbot_workflow` prompt" to understand how to chain the macro tools together.
+
+### Logs
+The server writes a log to your user log directory (Linux: `~/.local/state/quillbot_mcp/log/quillbot_mcp.log`, macOS: `~/Library/Logs/quillbot_mcp/quillbot_mcp.log`). Check it if a client shows the server as failed.
 
 ## Running Tests
 
