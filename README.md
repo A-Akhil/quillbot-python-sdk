@@ -1,7 +1,11 @@
 <!-- mcp-name: io.github.A-Akhil/quillbot -->
 # QuillBot Python SDK
 
+<div align="center">
 
+[![Downloads](https://static.pepy.tech/personalized-badge/quillbot?period=total&units=INTERNATIONAL_SYSTEM&left_color=GREEN&right_color=ORANGE&left_text=downloads)](https://pepy.tech/project/quillbot)
+
+</div>
 
 A lightweight, purely HTTP-based Python SDK for interacting with the QuillBot API. 
 
